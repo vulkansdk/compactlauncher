@@ -327,15 +327,14 @@ private slots:
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
 #else
+                std::vector<std::string> argVec = buildLaunchArgVec(name, ram, version, java);
+                if (argVec.empty()) return;
+
                 pid_t pid = fork();
                 if (pid == 0) {
                     setsid();
-                    std::vector<std::string> tokens;
-                    std::istringstream iss(java + " " + args);
-                    std::string tok;
-                    while (iss >> std::quoted(tok)) tokens.push_back(tok);
                     std::vector<char*> argv2;
-                    for (auto& t : tokens) argv2.push_back(const_cast<char*>(t.c_str()));
+                    for (auto& t : argVec) argv2.push_back(const_cast<char*>(t.c_str()));
                     argv2.push_back(nullptr);
                     execvp(argv2[0], argv2.data());
                     _exit(1);
@@ -602,7 +601,11 @@ private:
         if (!inheritsFrom.empty()) collectArgs(baseJson);
 
         if (jvmArgs.empty()) {
+#ifdef _WIN32
             jvmArgs = "-Djava.library.path=\"" + nativesPath + "\" -cp \"" + cp + "\"";
+#else
+            jvmArgs = "-Djava.library.path=" + nativesPath + " -cp " + cp;
+#endif
         } else {
             auto replace = [](std::string s, const std::string& from, const std::string& to) {
                 size_t p = 0;
@@ -613,7 +616,11 @@ private:
                 return s;
             };
             jvmArgs = replace(jvmArgs, "${natives_directory}", nativesPath);
+#ifdef _WIN32
             jvmArgs = replace(jvmArgs, "${launcher_name}", "\"Compact Launcher\"");
+#else
+            jvmArgs = replace(jvmArgs, "${launcher_name}", "Compact Launcher");
+#endif
             jvmArgs = replace(jvmArgs, "${launcher_version}", LAUNCHER_VERSION);
             jvmArgs = replace(jvmArgs, "${classpath}", cp);
             jvmArgs = replace(jvmArgs, "${library_directory}", m_workDir + "/libraries");
@@ -634,7 +641,11 @@ private:
 
         gameArgs = replaceAll(gameArgs, "${auth_player_name}",  name);
         gameArgs = replaceAll(gameArgs, "${version_name}",      version);
+#ifdef _WIN32
         gameArgs = replaceAll(gameArgs, "${game_directory}",    "\"" + m_workDir + "\"");
+#else
+        gameArgs = replaceAll(gameArgs, "${game_directory}",    m_workDir);
+#endif
         gameArgs = replaceAll(gameArgs, "${assets_root}",       m_workDir + "/assets");
         gameArgs = replaceAll(gameArgs, "${auth_uuid}",         uuid);
         gameArgs = replaceAll(gameArgs, "${auth_access_token}", "0");
@@ -693,6 +704,261 @@ private:
 
         return cleaned;
     }
+
+#ifndef _WIN32
+    std::vector<std::string> buildLaunchArgVec(
+        const std::string& name,
+        long ram,
+        const std::string& version,
+        const std::string& java)
+    {
+        std::vector<std::string> argv;
+        std::string versionDir  = m_workDir + "/versions/" + version;
+        std::string versionJson = versionDir + "/" + version + ".json";
+        std::string jsonStr     = readFileText(versionJson);
+        if (jsonStr.empty()) {
+            QMetaObject::invokeMethod(this, [this]() {
+                QMessageBox::critical(this, "Error", "Version JSON not found!");
+                m_statusLabel->setText("Error");
+            }, Qt::QueuedConnection);
+            return {};
+        }
+
+        auto json = parseJson(jsonStr);
+        std::string inheritsFrom = json["inheritsFrom"].asString();
+        JsonValue baseJson;
+        std::string baseVersion = version;
+        if (!inheritsFrom.empty()) {
+            std::string baseJsonStr = readFileText(m_workDir + "/versions/" + inheritsFrom + "/" + inheritsFrom + ".json");
+            if (baseJsonStr.empty()) {
+                QMetaObject::invokeMethod(this, [this, inheritsFrom]() {
+                    QMessageBox::critical(this, "Error", QString("Missing base version: %1\nPlease download it first.").arg(QString::fromStdString(inheritsFrom)));
+                    m_statusLabel->setText("Error");
+                }, Qt::QueuedConnection);
+                return {};
+            }
+            baseJson = parseJson(baseJsonStr);
+            baseVersion = inheritsFrom;
+        }
+
+        std::string clientJar = versionDir + "/" + version + ".jar";
+        if (!fs::exists(clientJar) && !inheritsFrom.empty()) {
+            std::string baseJar = m_workDir + "/versions/" + inheritsFrom + "/" + inheritsFrom + ".jar";
+            if (fs::exists(baseJar))
+                fs::copy_file(baseJar, clientJar, fs::copy_options::overwrite_existing);
+        }
+        if (!fs::exists(clientJar)) {
+            QMetaObject::invokeMethod(this, [this]() {
+                QMessageBox::critical(this, "Error", "Client JAR not found! Download the version first.");
+                m_statusLabel->setText("Error");
+            }, Qt::QueuedConnection);
+            return {};
+        }
+
+        long long releaseTime = 0;
+        {
+            const JsonValue& rt = inheritsFrom.empty() ? json : baseJson;
+            std::string rtStr = rt["releaseTime"].asString();
+            if (!rtStr.empty()) {
+                int year = 0, month = 0;
+                sscanf(rtStr.c_str(), "%d-%d", &year, &month);
+                releaseTime = year * 365LL + month * 30;
+            }
+        }
+
+        std::string assetsIndex;
+        if (!inheritsFrom.empty() && baseJson.has("assets"))
+            assetsIndex = baseJson["assets"].asString();
+        else if (json.has("assets"))
+            assetsIndex = json["assets"].asString();
+        if (assetsIndex.empty()) {
+            if (releaseTime > 0 && releaseTime < 734925) assetsIndex = "pre-1.6";
+            else assetsIndex = "legacy";
+        }
+
+        std::string nativesPath = m_workDir + "/versions/" + baseVersion + "/natives";
+
+        std::vector<LibraryInfo> allLibs;
+        std::set<std::string> includedGA;
+        auto addLibs = [&](const JsonValue& j, const std::string& ver) {
+            auto libs = parseLibraries(m_workDir, j, ver, false, includedGA);
+            for (auto& lib : libs) {
+                includedGA.insert(fs::path(lib.jarPath).parent_path().parent_path().string());
+                allLibs.push_back(lib);
+            }
+        };
+        addLibs(json, version);
+        if (!inheritsFrom.empty()) addLibs(baseJson, inheritsFrom);
+
+        if (m_cfg->value(CFG_DL_MISSING_LIBS, DEFAULT_DL_MISSING).toBool()) {
+            auto dlEntries = buildLibraryDownloadList(m_workDir, allLibs, false);
+            if (!dlEntries.empty()) {
+                m_dlManager = std::make_unique<DownloadManager>();
+                m_dlManager->threads = m_cfg->value(CFG_DL_THREADS, DEFAULT_DL_THREADS).toInt();
+                QMetaObject::invokeMethod(this, [this, count = dlEntries.size()]() {
+                    m_statusLabel->setText(QString("Downloading %1 missing files...").arg(count));
+                }, Qt::QueuedConnection);
+                for (auto& e : dlEntries) {
+                    mkdirRecursive(fs::path(e.localPath).parent_path().string());
+                    httpDownloadToFile(e.url, e.localPath);
+                }
+            }
+        }
+
+        extractNatives(m_workDir, baseVersion, allLibs);
+
+        std::string cp = buildClasspath(m_workDir, allLibs, clientJar);
+
+        std::string mainClass = json["mainClass"].asString();
+        if (mainClass.empty() && !inheritsFrom.empty())
+            mainClass = baseJson["mainClass"].asString();
+
+        auto isRuleAllowed = [](const JsonValue& entry) -> bool {
+            if (!entry.has("rules")) return true;
+            const auto& rules = entry["rules"];
+            bool allowed = false;
+            for (size_t k = 0; k < rules.arr.size(); k++) {
+                const auto& rule = rules[k];
+                std::string action = rule["action"].asString();
+                if (rule.has("features")) return false;
+                bool hasOs = rule.has("os");
+                if (hasOs) {
+                    std::string osName = rule["os"]["name"].asString();
+                    std::string osArch = rule["os"]["arch"].asString();
+                    if (!osName.empty()) {
+                        const std::string curOs = "linux";
+                        if (action == "allow" && osName == curOs) allowed = true;
+                        else if (action == "disallow" && osName == curOs) { allowed = false; break; }
+                    } else if (!osArch.empty()) {
+                        if (action == "allow" && osArch == "x86") allowed = false;
+                    }
+                } else {
+                    if (action == "allow") allowed = true;
+                    else { allowed = false; break; }
+                }
+            }
+            return allowed;
+        };
+
+        std::vector<std::string> jvmVec;
+        std::vector<std::string> gameVec;
+
+        auto collectArgVec = [&](const JsonValue& j) {
+            if (j.has("arguments")) {
+                const auto& jvmArr = j["arguments"]["jvm"];
+                for (size_t i = 0; i < jvmArr.arr.size(); i++) {
+                    if (jvmArr[i].isString()) {
+                        jvmVec.push_back(jvmArr[i].asString());
+                    } else if (jvmArr[i].isObject() && isRuleAllowed(jvmArr[i])) {
+                        const auto& val = jvmArr[i]["value"];
+                        if (val.isString()) jvmVec.push_back(val.asString());
+                        else if (val.isArray())
+                            for (size_t k = 0; k < val.arr.size(); k++)
+                                if (val[k].isString()) jvmVec.push_back(val[k].asString());
+                    }
+                }
+                const auto& gameArr = j["arguments"]["game"];
+                for (size_t i = 0; i < gameArr.arr.size(); i++) {
+                    if (gameArr[i].isString()) {
+                        gameVec.push_back(gameArr[i].asString());
+                    } else if (gameArr[i].isObject() && isRuleAllowed(gameArr[i])) {
+                        const auto& val = gameArr[i]["value"];
+                        if (val.isString()) gameVec.push_back(val.asString());
+                        else if (val.isArray())
+                            for (size_t k = 0; k < val.arr.size(); k++)
+                                if (val[k].isString()) gameVec.push_back(val[k].asString());
+                    }
+                }
+            } else if (j.has("minecraftArguments")) {
+                std::istringstream iss(j["minecraftArguments"].asString());
+                std::string tok;
+                while (iss >> tok) gameVec.push_back(tok);
+            }
+        };
+
+        collectArgVec(json);
+        if (!inheritsFrom.empty()) collectArgVec(baseJson);
+
+        auto replaceInVec = [](std::vector<std::string>& vec,
+                               const std::string& from, const std::string& to) {
+            for (auto& s : vec) {
+                size_t p = 0;
+                while ((p = s.find(from, p)) != std::string::npos) {
+                    s.replace(p, from.size(), to);
+                    p += to.size();
+                }
+            }
+        };
+
+        if (jvmVec.empty()) {
+            jvmVec.push_back("-Djava.library.path=" + nativesPath);
+            jvmVec.push_back("-cp");
+            jvmVec.push_back(cp);
+        } else {
+            replaceInVec(jvmVec, "${natives_directory}", nativesPath);
+            replaceInVec(jvmVec, "${launcher_name}", "Compact Launcher");
+            replaceInVec(jvmVec, "${launcher_version}", LAUNCHER_VERSION);
+            replaceInVec(jvmVec, "${classpath}", cp);
+            replaceInVec(jvmVec, "${library_directory}", m_workDir + "/libraries");
+            replaceInVec(jvmVec, "${classpath_separator}", ":");
+        }
+
+        std::string uuid = offlineUUID(name);
+        replaceInVec(gameVec, "${auth_player_name}",  name);
+        replaceInVec(gameVec, "${version_name}",      version);
+        replaceInVec(gameVec, "${game_directory}",    m_workDir);
+        replaceInVec(gameVec, "${assets_root}",       m_workDir + "/assets");
+        replaceInVec(gameVec, "${auth_uuid}",         uuid);
+        replaceInVec(gameVec, "${auth_access_token}", "0");
+        replaceInVec(gameVec, "${clientid}",          "0");
+        replaceInVec(gameVec, "${auth_xuid}",         "0");
+        replaceInVec(gameVec, "${user_properties}",   "{}");
+        replaceInVec(gameVec, "${user_type}",         "mojang");
+        replaceInVec(gameVec, "${version_type}",      "release");
+        replaceInVec(gameVec, "${assets_index_name}", assetsIndex);
+        replaceInVec(gameVec, "${auth_session}",      "0");
+        replaceInVec(gameVec, "${game_assets}",       m_workDir + "/resources");
+        replaceInVec(gameVec, "${classpath}",         cp);
+
+        std::string log4jArg;
+        const JsonValue& logSrc = inheritsFrom.empty() ? json : baseJson;
+        if (logSrc.has("logging")) {
+            std::string logId = logSrc["logging"]["client"]["file"]["id"].asString();
+            if (!logId.empty()) {
+                std::string logPath = m_workDir + "/assets/log_configs/" + logId;
+                log4jArg = "-Dlog4j.configurationFile=file://" + logPath;
+            }
+        }
+
+        std::string extraJvm;
+        if (m_cfg->value(CFG_USE_CUSTOM_ARGS, DEFAULT_USE_CUSTOM_ARGS).toBool())
+            extraJvm = m_cfg->value(CFG_CUSTOM_ARGS, DEFAULT_JVM_ARGS_NEW).toString().toStdString();
+        else {
+            if (releaseTime > 0 && releaseTime < 736780)
+                extraJvm = DEFAULT_JVM_ARGS_OLD;
+            else
+                extraJvm = DEFAULT_JVM_ARGS_NEW;
+        }
+
+        if (assetsIndex == "pre-1.6" || assetsIndex == "legacy")
+            assetsToResources(assetsIndex);
+
+        argv.push_back(java);
+        argv.push_back("-Xmx" + std::to_string(ram) + "M");
+        {
+            std::istringstream iss(extraJvm);
+            std::string tok;
+            while (iss >> tok) argv.push_back(tok);
+        }
+        argv.push_back("-Dlog4j2.formatMsgNoLookups=true");
+        if (!log4jArg.empty()) argv.push_back(log4jArg);
+        for (auto& a : jvmVec) argv.push_back(a);
+        argv.push_back(mainClass);
+        for (auto& a : gameVec) argv.push_back(a);
+
+        return argv;
+    }
+#endif
 
     void assetsToResources(const std::string& assetsIndex) {
         std::string indexPath = m_workDir + "/assets/indexes/" + assetsIndex + ".json";

@@ -75,7 +75,7 @@ static bool isNativesClassifier(const std::string& classifier) {
            classifier.find("macos") != std::string::npos;
 }
 
-static bool isWindowsNativesClassifier(const std::string& classifier) {
+[[maybe_unused]] static bool isWindowsNativesClassifier(const std::string& classifier) {
     if (classifier.find("natives-windows") != std::string::npos) return true;
     if (classifier.find("natives-linux") != std::string::npos)   return false;
     if (classifier.find("natives-macos") != std::string::npos)   return false;
@@ -341,8 +341,21 @@ inline void extractNatives(
         if (!lib.isNative) continue;
         std::string jarPath = workDir + "/libraries/" + lib.jarPath;
         if (!fs::exists(jarPath)) continue;
-        std::string cmd = "unzip -o '" + jarPath + "' -d '" + nativesDir + "' '*.so' '*.jnilib' '*.dylib' 2>/dev/null";
+        std::string tmpDir = nativesDir + "/_extract_tmp";
+        fs::create_directories(tmpDir);
+        std::string cmd = "unzip -o '" + jarPath + "' -d '" + tmpDir + "' '*.so' '*.jnilib' '*.dylib' 2>/dev/null";
         system(cmd.c_str());
+        for (auto& entry : fs::recursive_directory_iterator(tmpDir, fs::directory_options::skip_permission_denied)) {
+            if (!entry.is_regular_file()) continue;
+            std::string ext = entry.path().extension().string();
+            if (ext == ".so" || ext == ".jnilib" || ext == ".dylib") {
+                std::string dest = nativesDir + "/" + entry.path().filename().string();
+                std::error_code ec;
+                fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing, ec);
+            }
+        }
+        std::error_code ec;
+        fs::remove_all(tmpDir, ec);
     }
 }
 #endif

@@ -115,7 +115,7 @@ static size_t curlWriteStr(char* ptr, size_t size, size_t nmemb, void* userdata)
     s->append(ptr, size * nmemb);
     return size * nmemb;
 }
-static size_t curlWriteFile(char* ptr, size_t size, size_t nmemb, void* userdata) {
+[[maybe_unused]] static size_t curlWriteFile(char* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* f = static_cast<FILE*>(userdata);
     return fwrite(ptr, size, nmemb, f);
 }
