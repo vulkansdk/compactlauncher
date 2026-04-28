@@ -22,7 +22,7 @@ This helps keep the project consistent and avoids unnecessary changes.
 Build instructions are available in the [BUILD.md](BUILD.md) file. 
 
 ## License
-Copyright © 2026 vulkansdk
+Copyright © 2026 bswap64
 
 Compact Launcher is licensed under the GNU General Public License v3.0 (GPLv3).
 
