@@ -79,7 +79,7 @@ public:
         m_javaCombo->setToolTip("Select Java installation");
         sizer->addWidget(m_javaCombo);
 
-        m_playBtn = new QPushButton("▶  PLAY");
+        m_playBtn = new QPushButton("Play");
         QFont boldFont = m_playBtn->font();
         boldFont.setPointSize(12);
         boldFont.setBold(true);
