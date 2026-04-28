@@ -2,7 +2,7 @@
 
 /*
     CLauncher [Compact Launcher]
-    author: vulkansdk (also known as vu1k4n, or just vulkan.)
+    author: bswap64.
 */
 
 
