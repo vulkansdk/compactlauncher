@@ -156,10 +156,10 @@ private:
 #else
             std::to_string((int)getpid()) +
 #endif
-            ",\"activity\":{\"details\":\"Compact Launcher\","
-            "\"timestamps\":{\"start\":" + std::to_string(m_startTime) + "},"
-            "\"assets\":{\"large_image\":\"logo\",\"large_text\":\"Compact Launcher\"}"
-            "}},\"nonce\":\"" + nonce + "\"}";
+        ",\"activity\":{"
+        "\"timestamps\":{\"start\":" + std::to_string(m_startTime) + "},"
+        "\"assets\":{\"large_image\":\"logo\",\"large_text\":\"Compact Launcher\"}"
+        "}},\"nonce\":\"" + nonce + "\"}";
 
         if (!sendFrame(1, payload)) return false;
         uint32_t op; std::string resp;

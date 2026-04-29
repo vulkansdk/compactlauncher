@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
     Logger::instance().open(logPath);
     LOG("OnInit started");
 
-    DiscordRPC::instance().init("1366741661492752397");
+    DiscordRPC::instance().init("1498789925481611516");
 
     MainFrame w;
     w.show();
