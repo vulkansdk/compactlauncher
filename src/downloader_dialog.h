@@ -25,7 +25,7 @@ public:
         , m_cfg(cfg), m_workDir(workDir), m_manifest(manifestJson)
         , m_onVersionInstalled(onVersionInstalled)
     {
-        setWindowTitle("Download Minecraft Version");
+        setWindowTitle("Download Minecraft");
         resize(360, 320);
 
         auto* sizer = new QVBoxLayout(this);
