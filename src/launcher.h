@@ -1,7 +1,7 @@
 #pragma once
 
 /*
-    CLauncher [Compact Launcher]
+    CLauncher (Compact Launcher)
     author: bswap64.
 */
 
